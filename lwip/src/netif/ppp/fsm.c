@@ -40,11 +40,11 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "lwip/opt.h"
+#include "netif/ppp/ppp_opts.h"
 #if PPP_SUPPORT /* don't build if not configured for use in lwipopts.h */
 
 /*
- * TODO:
+ * @todo:
  * Randomize fsm id on link/init.
  * Deal with variable outgoing MTU.
  */
@@ -186,6 +186,8 @@ void fsm_open(fsm *f) {
 	    fsm_lowerup(f);
 	}
 	break;
+    default:
+	break;
     }
 }
 
@@ -206,7 +208,7 @@ static void terminate_layer(fsm *f, int nextstate) {
     /* Init restart counter and send Terminate-Request */
     f->retransmits = pcb->settings.fsm_max_term_transmits;
     fsm_sdata(f, TERMREQ, f->reqid = ++f->id,
-	      (u_char *) f->term_reason, f->term_reason_len);
+	      (const u_char *) f->term_reason, f->term_reason_len);
 
     if (f->retransmits == 0) {
 	/*
@@ -232,9 +234,9 @@ static void terminate_layer(fsm *f, int nextstate) {
  * Cancel timeouts and either initiate close or possibly go directly to
  * the PPP_FSM_CLOSED state.
  */
-void fsm_close(fsm *f, char *reason) {
+void fsm_close(fsm *f, const char *reason) {
     f->term_reason = reason;
-    f->term_reason_len = (reason == NULL? 0: LWIP_MIN(strlen(reason), 0xFF) );
+    f->term_reason_len = (reason == NULL? 0: (u8_t)LWIP_MIN(strlen(reason), 0xFF) );
     switch( f->state ){
     case PPP_FSM_STARTING:
 	f->state = PPP_FSM_INITIAL;
@@ -251,6 +253,8 @@ void fsm_close(fsm *f, char *reason) {
     case PPP_FSM_ACKSENT:
     case PPP_FSM_OPENED:
 	terminate_layer(f, PPP_FSM_CLOSING);
+	break;
+    default:
 	break;
     }
 }
@@ -276,7 +280,7 @@ static void fsm_timeout(void *arg) {
 	} else {
 	    /* Send Terminate-Request */
 	    fsm_sdata(f, TERMREQ, f->reqid = ++f->id,
-		      (u_char *) f->term_reason, f->term_reason_len);
+		      (const u_char *) f->term_reason, f->term_reason_len);
 	    TIMEOUT(fsm_timeout, f, pcb->settings.fsm_timeout_time);
 	    --f->retransmits;
 	}
@@ -286,7 +290,7 @@ static void fsm_timeout(void *arg) {
     case PPP_FSM_ACKRCVD:
     case PPP_FSM_ACKSENT:
 	if (f->retransmits <= 0) {
-	    ppp_warn("%s: timeout sending Config-Requests\n", PROTO_NAME(f));
+	    ppp_warn(("%s: timeout sending Config-Requests", PROTO_NAME(f)));
 	    f->state = PPP_FSM_STOPPED;
 	    if( (f->flags & OPT_PASSIVE) == 0 && f->callbacks->finished )
 		(*f->callbacks->finished)(f);
@@ -410,6 +414,8 @@ static void fsm_rconfreq(fsm *f, u_char id, u_char *inp, int len) {
 	fsm_sconfreq(f, 0);		/* Send initial Configure-Request */
 	f->state = PPP_FSM_REQSENT;
 	break;
+    default:
+	break;
     }
 
     /*
@@ -458,7 +464,7 @@ static void fsm_rconfack(fsm *f, int id, u_char *inp, int len) {
     if( !(f->callbacks->ackci? (*f->callbacks->ackci)(f, inp, len):
 	  (len == 0)) ){
 	/* Ack is bad - ignore it */
-	ppp_error("Received bad configure-ack: %P", inp, len);
+	ppp_error(("Received bad configure-ack: %P", inp, len));
 	return;
     }
     f->seen_ack = 1;
@@ -497,6 +503,8 @@ static void fsm_rconfack(fsm *f, int id, u_char *inp, int len) {
 	fsm_sconfreq(f, 0);		/* Send initial Configure-Request */
 	f->state = PPP_FSM_REQSENT;
 	break;
+    default:
+	break;
     }
 }
 
@@ -516,14 +524,14 @@ static void fsm_rconfnakrej(fsm *f, int code, int id, u_char *inp, int len) {
 	treat_as_reject = (f->rnakloops >= f->maxnakloops);
 	if (f->callbacks->nakci == NULL
 	    || !(ret = f->callbacks->nakci(f, inp, len, treat_as_reject))) {
-	    ppp_error("Received bad configure-nak: %P", inp, len);
+	    ppp_error(("Received bad configure-nak: %P", inp, len));
 	    return;
 	}
     } else {
 	f->rnakloops = 0;
 	if (f->callbacks->rejci == NULL
 	    || !(ret = f->callbacks->rejci(f, inp, len))) {
-	    ppp_error("Received bad configure-rej: %P", inp, len);
+	    ppp_error(("Received bad configure-rej: %P", inp, len));
 	    return;
 	}
     }
@@ -560,6 +568,8 @@ static void fsm_rconfnakrej(fsm *f, int code, int id, u_char *inp, int len) {
 	fsm_sconfreq(f, 0);		/* Send initial Configure-Request */
 	f->state = PPP_FSM_REQSENT;
 	break;
+    default:
+	break;
     }
 }
 
@@ -578,14 +588,16 @@ static void fsm_rtermreq(fsm *f, int id, u_char *p, int len) {
 
     case PPP_FSM_OPENED:
 	if (len > 0) {
-	    ppp_info("%s terminated by peer (%0.*v)", PROTO_NAME(f), len, p);
+	    ppp_info(("%s terminated by peer (%0.*v)", PROTO_NAME(f), len, p));
 	} else
-	    ppp_info("%s terminated by peer", PROTO_NAME(f));
+	    ppp_info(("%s terminated by peer", PROTO_NAME(f)));
 	f->retransmits = 0;
 	f->state = PPP_FSM_STOPPING;
 	if (f->callbacks->down)
 	    (*f->callbacks->down)(f);	/* Inform upper layers */
 	TIMEOUT(fsm_timeout, f, pcb->settings.fsm_timeout_time);
+	break;
+    default:
 	break;
     }
 
@@ -621,6 +633,8 @@ static void fsm_rtermack(fsm *f) {
 	fsm_sconfreq(f, 0);
 	f->state = PPP_FSM_REQSENT;
 	break;
+    default:
+	break;
     }
 }
 
@@ -637,7 +651,7 @@ static void fsm_rcoderej(fsm *f, u_char *inp, int len) {
     }
     GETCHAR(code, inp);
     GETCHAR(id, inp);
-    ppp_warn("%s: Rcvd Code-Reject for code %d, id %d", PROTO_NAME(f), code, id);
+    ppp_warn(("%s: Rcvd Code-Reject for code %d, id %d", PROTO_NAME(f), code, id));
 
     if( f->state == PPP_FSM_ACKRCVD )
 	f->state = PPP_FSM_REQSENT;
@@ -721,7 +735,7 @@ static void fsm_sconfreq(fsm *f, int retransmit) {
     } else
 	cilen = 0;
 
-    p = pbuf_alloc(PBUF_RAW, (u16_t)(cilen + HEADERLEN + PPP_HDRLEN), PPP_CTRL_PBUF_TYPE);
+    p = pbuf_alloc(PBUF_RAW, (u16_t)(cilen + HEADERLEN + PPP_HDRLEN), PBUF_RAM);
     if(NULL == p)
         return;
     if(p->tot_len != p->len) {
@@ -730,13 +744,14 @@ static void fsm_sconfreq(fsm *f, int retransmit) {
     }
 
     /* send the request to our peer */
-    outp = p->payload;
+    outp = (u_char*)p->payload;
     MAKEHEADER(outp, f->protocol);
     PUTCHAR(CONFREQ, outp);
     PUTCHAR(f->reqid, outp);
     PUTSHORT(cilen + HEADERLEN, outp);
     if (cilen != 0) {
 	(*f->callbacks->addci)(f, outp, &cilen);
+	LWIP_ASSERT("cilen == p->len - HEADERLEN - PPP_HDRLEN", cilen == p->len - HEADERLEN - PPP_HDRLEN);
     }
 
     ppp_write(pcb, p);
@@ -752,7 +767,7 @@ static void fsm_sconfreq(fsm *f, int retransmit) {
  *
  * Used for all packets sent to our peer by this module.
  */
-void fsm_sdata(fsm *f, u_char code, u_char id, u_char *data, int datalen) {
+void fsm_sdata(fsm *f, u_char code, u_char id, const u_char *data, int datalen) {
     ppp_pcb *pcb = f->pcb;
     struct pbuf *p;
     u_char *outp;
@@ -763,7 +778,7 @@ void fsm_sdata(fsm *f, u_char code, u_char id, u_char *data, int datalen) {
 	datalen = pcb->peer_mru - HEADERLEN;
     outlen = datalen + HEADERLEN;
 
-    p = pbuf_alloc(PBUF_RAW, (u16_t)(outlen + PPP_HDRLEN), PPP_CTRL_PBUF_TYPE);
+    p = pbuf_alloc(PBUF_RAW, (u16_t)(outlen + PPP_HDRLEN), PBUF_RAM);
     if(NULL == p)
         return;
     if(p->tot_len != p->len) {
@@ -771,9 +786,10 @@ void fsm_sdata(fsm *f, u_char code, u_char id, u_char *data, int datalen) {
         return;
     }
 
-    outp = p->payload;
-/*  if (datalen && data != outp + PPP_HDRLEN + HEADERLEN)  -- was only for fsm_sconfreq() */
-	MEMCPY(outp + PPP_HDRLEN + HEADERLEN, data, datalen);
+    outp = (u_char*)p->payload;
+    if (datalen && data != NULL) { /* && data != outp + PPP_HDRLEN + HEADERLEN)  -- was only for fsm_sconfreq() */
+      MEMCPY(outp + PPP_HDRLEN + HEADERLEN, data, datalen);
+    }
     MAKEHEADER(outp, f->protocol);
     PUTCHAR(code, outp);
     PUTCHAR(id, outp);

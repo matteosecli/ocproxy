@@ -55,8 +55,8 @@
 #include "lwip/netif.h"
 #include "lwip/stats.h"
 #include "lwip/sys.h"
-#include "lwip/tcp_impl.h"
-#include "netif/tcpdump.h"
+#include "lwip/tcp.h"
+#include "lwip/timeouts.h"
 
 enum {
 	STATE_NEW		= 0,
@@ -265,7 +265,6 @@ static int ocp_sock_max;
 unsigned char debug_flags = 0;
 
 static int allow_remote;
-static int tcpdump_enabled;
 static int keep_intvl;
 static int got_sighup;
 static int got_sigusr1;
@@ -273,7 +272,7 @@ static char *dns_domain;
 static FILE *logfile;
 static char *logfile_path;
 
-static void start_connection(struct ocp_sock *s, ip_addr_t *ipaddr);
+static void start_connection(struct ocp_sock *s, const ip_addr_t *ipaddr);
 static void start_resolution(struct ocp_sock *s, const char *hostname);
 
 /**********************************************************************
@@ -680,8 +679,9 @@ static void http_send_error(struct ocp_sock *s, const char *status, const char *
 		       "\r\n"
 		       "%s\r\n", status, msg);
 
-	if (write(s->fd, buf, len) != len)
-		; /* ignore error */
+	if (write(s->fd, buf, len) != len) {
+		/* ignore error */
+	}
 	ocp_sock_del(s);
 }
 
@@ -1095,7 +1095,7 @@ static err_t connect_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
 	return ERR_OK;
 }
 
-static void start_connection(struct ocp_sock *s, ip_addr_t *ipaddr)
+static void start_connection(struct ocp_sock *s, const ip_addr_t *ipaddr)
 {
 	struct tcp_pcb *tpcb;
 	err_t err;
@@ -1133,7 +1133,7 @@ static void start_connection(struct ocp_sock *s, ip_addr_t *ipaddr)
 		warn("%s: tcp_connect() returned %d\n", __func__, (int)err);
 }
 
-static void finish_resolution(const char *hostname, ip_addr_t *ipaddr, void *arg)
+static void finish_resolution(const char *hostname, const ip_addr_t *ipaddr, void *arg)
 {
 	struct ocp_sock *s = arg;
 
@@ -1187,7 +1187,7 @@ static void enqueue_dns_req(struct ocp_sock *s, const char *hostname,
 	}
 }
 
-static void retry_resolution(const char *hostname, ip_addr_t *ipaddr, void *arg)
+static void retry_resolution(const char *hostname, const ip_addr_t *ipaddr, void *arg)
 {
 	struct ocp_sock *s = arg;
 
@@ -1298,8 +1298,6 @@ static void lwip_data_cb(evutil_socket_t fd, short what, void *ctx)
 			q = q->next;
 		}
 		LINK_STATS_INC(link.recv);
-		if (tcpdump_enabled)
-			tcpdump(p);
 		s->netif->input(p, s->netif);
 	} else
 		warn("%s: could not allocate pbuf\n", __func__);
@@ -1307,15 +1305,12 @@ static void lwip_data_cb(evutil_socket_t fd, short what, void *ctx)
 }
 
 /* Called when lwIP has data to send up to the VPN */
-static err_t lwip_data_out(struct netif *netif, struct pbuf *p, ip_addr_t *ipaddr)
+static err_t lwip_data_out(struct netif *netif, struct pbuf *p, const ip4_addr_t *ipaddr)
 {
 	struct ocp_sock *s = netif->state;
 	int i = 0, total = 0;
 	ssize_t ret;
 	struct iovec iov[MAX_IOVEC];
-
-	if (tcpdump_enabled)
-		tcpdump(p);
 
 	for (; p; p = p->next) {
 		if (i >= MAX_IOVEC) {
@@ -1378,14 +1373,18 @@ static void new_periodic_event(event_callback_fn cb, void *arg, int timeout_ms)
 	evtimer_add(ev, &tv);
 }
 
-static void cb_tcp_tmr(evutil_socket_t fd, short what, void *ctx)
+/* lwIP (NO_SYS=1) needs a millisecond clock for its internal timers */
+u32_t sys_now(void)
 {
-	tcp_tmr();
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-static void cb_dns_tmr(evutil_socket_t fd, short what, void *ctx)
+static void cb_lwip_timers(evutil_socket_t fd, short what, void *ctx)
 {
-	dns_tmr();
+	sys_check_timeouts();
 }
 
 static void cb_housekeeping(evutil_socket_t fd, short what, void *ctx)
@@ -1554,7 +1553,6 @@ static void print_help(const char *progname)
 	printf("  -l, --logfile PATH      Log all connections to specified file\n");
 	printf("  -g, --allow-remote      Allow remote connections (default: localhost only)\n");
 	printf("  -v, --verbose           Enable verbose debug output\n");
-	printf("  -T, --tcpdump           Enable tcpdump-style packet logging\n");
 	printf("  -h, --help              Display this help message and exit\n");
 	printf("\n");
 	printf("Environment variables:\n");
@@ -1585,7 +1583,6 @@ static struct option longopts[] = {
 	{ "logfile",		1,	NULL,	'l' },
 	{ "allow-remote",	0,	NULL,	'g' },
 	{ "verbose",		0,	NULL,	'v' },
-	{ "tcpdump",		0,	NULL,	'T' },
 	{ "help",		0,	NULL,	'h' },
 	{ NULL }
 };
@@ -1640,7 +1637,7 @@ int main(int argc, char **argv)
 
 	/* override with command line options */
 	while ((opt = getopt_long(argc, argv,
-				  "I:M:d:o:D:H:k:l:gL:vTh", longopts, NULL)) != -1) {
+				  "I:M:d:o:D:H:k:l:gL:vh", longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'I':
 			ip_str = optarg;
@@ -1676,9 +1673,6 @@ int main(int argc, char **argv)
 			debug_flags = LWIP_DBG_ON | LWIP_DBG_TRACE |
 				      LWIP_DBG_STATE | LWIP_DBG_FRESH |
 				      LWIP_DBG_HALT;
-			break;
-		case 'T':
-			tcpdump_enabled = 1;
 			break;
 		case 'h':
 			print_help(argv[0]);
@@ -1723,6 +1717,7 @@ int main(int argc, char **argv)
 	memset(&netif, 0, sizeof(netif));
 	s->netif = &netif;
 
+	srandom(time(NULL) ^ getpid());
 	lwip_init();
 	dns_init();
 
@@ -1739,16 +1734,13 @@ int main(int argc, char **argv)
 	netif.mtu = ocp_atoi(mtu_str);
 
 	netif_set_default(&netif);
+	netif_set_link_up(&netif);
 	netif_set_up(&netif);
 
 	/* bind after all options have been parsed (especially -g) */
 	bind_all_listeners();
 
-	if (tcpdump_enabled)
-		tcpdump_init();
-
-	new_periodic_event(cb_tcp_tmr, NULL, 250);
-	new_periodic_event(cb_dns_tmr, NULL, 1000);
+	new_periodic_event(cb_lwip_timers, NULL, 100);
 	new_periodic_event(cb_housekeeping, &vpnfd, 1000);
 
 	event_base_dispatch(event_base);

@@ -1,5 +1,18 @@
 v1.70 - UNRELEASED
 
+ - Fork maintained at https://github.com/matteosecli/ocproxy
+
+ - Merge upstream PRs #14, #18, #21, #30 (HTTP proxy, -H), #33 (backpressure
+   instead of dropping packets on socketpair overflow)
+
+ - Update bundled lwIP to 2.2.1 (NO_SYS raw API, no pthreads); remove the
+   -T/--tcpdump option (no longer provided by lwIP)
+
+ - Default to a 64 MiB lwIP heap and 256 KiB TCP send buffer / receive window
+   (window scaling, shift 3); tunable via -DOCPROXY_* at configure time
+
+ - Add end-to-end test suite ("make check") and GitHub Actions CI/release
+
  - Have the vpnns watcher process re-create the bind mount if the underlying
    resolv.conf is deleted (e.g. by NetworkManager)
 

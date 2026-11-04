@@ -9,6 +9,9 @@ config.log
 config.status
 configure
 depcomp
+test-driver
+*.log
+*.trs
 install-sh
 missing
 .deps/

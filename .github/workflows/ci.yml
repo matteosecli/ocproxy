@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-amd64, runner: ubuntu-24.04,     os: linux, arch: amd64 }
+          - { name: linux-arm64, runner: ubuntu-24.04-arm, os: linux, arch: arm64 }
+          - { name: macos-arm64, runner: macos-15,         os: macos, arch: arm64 }
+          - { name: macos-amd64, runner: macos-15-intel,   os: macos, arch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libevent-dev
+          echo "EVENT_CPPFLAGS=" >> "$GITHUB_ENV"
+          echo "EVENT_LIBS=-l:libevent.a" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          brew install libevent automake autoconf
+          prefix="$(brew --prefix libevent)"
+          echo "EVENT_CPPFLAGS=-I$prefix/include" >> "$GITHUB_ENV"
+          echo "EVENT_LIBS=$prefix/lib/libevent.a" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: |
+          ./autogen.sh
+          mkdir build
+          cd build
+          ../configure CPPFLAGS="$EVENT_CPPFLAGS" LIBS="$EVENT_LIBS"
+
+      - name: Build
+        run: make -C build -j4
+
+      - name: Test
+        run: make -C build check VERBOSE=1
+
+      - name: Check source distribution
+        if: matrix.name == 'linux-amd64'
+        run: make -C build distcheck DISTCHECK_CONFIGURE_FLAGS="LIBS=-l:libevent.a"
+
+      - name: Package
+        run: |
+          ver="${GITHUB_REF_NAME}"
+          [ "${{ github.event_name }}" = release ] || ver="dev-${GITHUB_SHA::7}"
+          name="ocproxy-${ver}-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp build/ocproxy ocproxy.1 README.md CHANGES lwip/COPYING "dist/$name/"
+          if [ -x build/vpnns ]; then cp build/vpnns vpnns.1 "dist/$name/"; fi
+          tar -C dist -czf "$name.tar.gz" "$name"
+          if [ "${{ matrix.name }}" = linux-amd64 ]; then
+            cp build/ocproxy-*.tar.gz "ocproxy-${ver}-source.tar.gz"
+          fi
+          file "dist/$name/ocproxy" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocproxy-${{ matrix.name }}
+          path: ocproxy-*.tar.gz
+
+  release:
+    name: Attach binaries to release
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          sha256sum ocproxy-*.tar.gz > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" ocproxy-*.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber

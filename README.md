@@ -196,6 +196,31 @@ Note: For Intel Macs, use `/usr/local` instead of `/opt/homebrew`:
       CPPFLAGS="-I/usr/local/opt/libevent/include" \
       LDFLAGS="-L/usr/local/opt/libevent/lib"
 
+Run the test suite (a self-contained end-to-end test; needs only python3):
+
+    make check
+
+Pre-built binaries (Linux and macOS, amd64 and arm64) are attached to each
+[release](https://github.com/matteosecli/ocproxy/releases).
+
+lwIP memory and TCP window tuning:
+
+By default ocproxy is built with a 64 MiB lwIP heap and 256 KiB TCP send
+buffers / receive windows (with TCP window scaling, shift 3).  These can be
+overridden at configure time, e.g.:
+
+    ./configure CPPFLAGS="-DOCPROXY_HEAP_BYTES=33554432 \
+                          -DOCPROXY_TCP_SND_BYTES=131072 \
+                          -DOCPROXY_TCP_WND_BYTES=131072 \
+                          -DOCPROXY_TCP_RCV_SCALE=2"
+
+The build fails if the window is not representable with the chosen scale
+(`TCP_WND <= 65535 << TCP_RCV_SCALE`).  See `src/lwipopts.h`.
+
+lwIP (currently 2.2.1) is bundled in `lwip/`; `make update-lwip` refreshes it.
+Note that the `-T`/`--tcpdump` option was removed, since the lwIP 2.x
+sources no longer ship the tcpdump helper.
+
 
 Other possible uses for ocproxy
 -------------------------------
@@ -286,6 +311,7 @@ If your X server is a version that uses abstract sockets only (and UNIX
 sockets in /tmp are disabled), you can re-enable UNIX sockets by adding
 `-listen unix` to `/etc/X11/xinit/xserverrc`.
 
+<!-- TODO: re-enable once a PPA is available for this fork.
 The OpenVPN example requires out-of-tree patches.  Updated openvpn and
 ocproxy packages are available for Ubuntu 14.04 LTS and 16.04 LTS:
 
@@ -294,6 +320,7 @@ ocproxy packages are available for Ubuntu 14.04 LTS and 16.04 LTS:
     add-apt-repository --yes ppa:cernekee
     apt-get update
     apt-get install ocproxy openvpn
+-->
 
 
 Credits
@@ -303,4 +330,6 @@ Original author: David Edmondson &lt;dme@dme.org&gt;
 
 Current maintainer: Kevin Cernekee &lt;cernekee@gmail.com&gt;
 
-Project home page: https://github.com/cernekee/ocproxy
+Fork home page: https://github.com/matteosecli/ocproxy
+
+Original project: https://github.com/cernekee/ocproxy
