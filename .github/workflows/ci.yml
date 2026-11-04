@@ -3,10 +3,14 @@ name: CI
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
-  release:
-    types: [published]
+    inputs:
+      tag:
+        description: 'Release tag to create or update (e.g. v2.0.0-rc.1); leave empty for a plain build'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -60,9 +64,10 @@ jobs:
         run: make -C build distcheck DISTCHECK_CONFIGURE_FLAGS="LIBS=-l:libevent.a"
 
       - name: Package
+        env:
+          RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
         run: |
-          ver="${GITHUB_REF_NAME}"
-          [ "${{ github.event_name }}" = release ] || ver="dev-${GITHUB_SHA::7}"
+          if [ -n "$RELEASE_TAG" ]; then ver="$RELEASE_TAG"; else ver="dev-${GITHUB_SHA::7}"; fi
           name="ocproxy-${ver}-${{ matrix.os }}-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp build/ocproxy ocproxy.1 README.md CHANGES lwip/COPYING "dist/$name/"
@@ -80,7 +85,7 @@ jobs:
 
   release:
     name: Attach binaries to release
-    if: github.event_name == 'release'
+    if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -94,8 +99,16 @@ jobs:
       - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           cd artifacts
           sha256sum ocproxy-*.tar.gz > SHA256SUMS
-          gh release upload "$GITHUB_REF_NAME" ocproxy-*.tar.gz SHA256SUMS \
+          # Tags containing "-" (e.g. v2.0.0-rc.1) are published as prereleases.
+          pre=""; case "$TAG" in *-*) pre="--prerelease";; esac
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "ocproxy ${TAG#v}" $pre \
+              --generate-notes
+          fi
+          gh release upload "$TAG" ocproxy-*.tar.gz SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
