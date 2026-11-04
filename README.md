@@ -217,6 +217,14 @@ overridden at configure time, e.g.:
 The build fails if the window is not representable with the chosen scale
 (`TCP_WND <= 65535 << TCP_RCV_SCALE`).  See `src/lwipopts.h`.
 
+The lwIP TCP segment and packet-buffer pool targets scale with those settings.
+They account for a number of fully buffered connections that fits within half
+the configured heap, capped by the TCP PCB count; the remaining heap is
+reserved for stack metadata and allocator overhead. Because lwIP is configured
+to allocate these pools dynamically from its fixed heap, these pool values are
+accounting targets, not independent allocation limits. The heap is the actual
+memory limit, and TCP may retransmit if it is exhausted.
+
 lwIP (currently 2.2.1) is bundled in `lwip/`; `make update-lwip` refreshes it.
 Note that the `-T`/`--tcpdump` option was removed, since the lwIP 2.x
 sources no longer ship the tcpdump helper.

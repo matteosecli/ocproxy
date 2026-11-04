@@ -1,4 +1,4 @@
-v1.70 - UNRELEASED
+v2.0.0 - UNRELEASED
 
  - Fork maintained at https://github.com/matteosecli/ocproxy
 
@@ -10,6 +10,9 @@ v1.70 - UNRELEASED
 
  - Default to a 64 MiB lwIP heap and 256 KiB TCP send buffer / receive window
    (window scaling, shift 3); tunable via -DOCPROXY_* at configure time
+
+ - Scale lwIP TCP segment and packet-buffer pool targets with the TCP buffer
+   sizes and heap budget
 
  - Add end-to-end test suite ("make check") and GitHub Actions CI/release
 

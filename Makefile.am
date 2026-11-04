@@ -42,10 +42,12 @@ bin_PROGRAMS		+= vpnns
 dist_man_MANS		+= vpnns.1
 endif
 
-TESTS			= tests/e2e_test.py
-TESTS_ENVIRONMENT	= OCPROXY=$(abs_builddir)/ocproxy
+TESTS			= tests/e2e_test.py tests/lwipopts_test.sh
+TESTS_ENVIRONMENT	= OCPROXY=$(abs_builddir)/ocproxy \
+			  CC='$(CC)' \
+			  LWIP_CPPFLAGS="-I$(abs_top_srcdir)/lwip/src/include -I$(abs_top_srcdir)/src"
 
-EXTRA_DIST		= .gitignore tests/e2e_test.py
+EXTRA_DIST		= .gitignore tests/e2e_test.py tests/lwipopts_test.sh
 DISTCLEANFILES		= *~
 
 # Copy from $(srcdir) only: with subdir-objects, a plain EXTRA_DIST entry for

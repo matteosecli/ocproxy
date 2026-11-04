@@ -101,6 +101,9 @@ extern unsigned char debug_flags;
 #define OCPROXY_HEAP_BYTES      67108864        /* 64 MiB */
 #endif
 #define MEM_SIZE                OCPROXY_HEAP_BYTES
+#if OCPROXY_HEAP_BYTES <= 0 || OCPROXY_HEAP_BYTES > 1073741824
+#error "OCPROXY_HEAP_BYTES must be positive and no larger than 1 GiB"
+#endif
 
 /* MEMP_NUM_PBUF: the number of memp struct pbufs. If the application
    sends a lot of data out of ROM (or other static memory), this
@@ -118,9 +121,22 @@ extern unsigned char debug_flags;
 /* MEMP_NUM_TCP_PCB_LISTEN: the number of listening TCP
    connections. */
 #define MEMP_NUM_TCP_PCB_LISTEN 80
-/* MEMP_NUM_TCP_SEG: the number of simultaneously queued TCP
-   segments. */
-#define MEMP_NUM_TCP_SEG        8192
+/* MEMP_NUM_TCP_SEG and PBUF_POOL_SIZE describe the buffering target that
+   fits in half of the lwIP heap. The other half is left for TCP/IP metadata
+   and allocator overhead. With MEMP_MEM_MALLOC these are accounting targets,
+   not hard limits; MEM_SIZE remains the actual allocation limit. */
+#define OCPROXY_BUFFER_BYTES_PER_CONN \
+        (OCPROXY_TCP_SND_BYTES + OCPROXY_TCP_WND_BYTES)
+#define OCPROXY_BUFFERED_CONNECTIONS \
+        (((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) > MEMP_NUM_TCP_PCB ? \
+         MEMP_NUM_TCP_PCB : \
+         (((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) > 0 ? \
+          ((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) : 1))
+
+/* The target number of queued segments for the configured send-buffer budget. */
+#define MEMP_NUM_TCP_SEG \
+        (OCPROXY_BUFFERED_CONNECTIONS * \
+         ((OCPROXY_TCP_SND_BYTES + TCP_MSS - 1) / TCP_MSS))
 /* MEMP_NUM_SYS_TIMEOUT: the number of simulateously active
    timeouts. */
 #define MEMP_NUM_SYS_TIMEOUT    300
@@ -138,11 +154,13 @@ extern unsigned char debug_flags;
 #define MEMP_NUM_TCPIP_MSG_INPKT 1600
 
 /* ---------- Pbuf options ---------- */
-/* PBUF_POOL_SIZE: the number of buffers in the pbuf pool. */
-#define PBUF_POOL_SIZE          10000
-
 /* PBUF_POOL_BUFSIZE: the size of each pbuf in the pbuf pool. */
 #define PBUF_POOL_BUFSIZE       2048
+
+/* Pool target for receive-window data, based on the configured heap budget. */
+#define PBUF_POOL_SIZE \
+        (OCPROXY_BUFFERED_CONNECTIONS * \
+         ((OCPROXY_TCP_WND_BYTES + PBUF_POOL_BUFSIZE - 1) / PBUF_POOL_BUFSIZE))
 
 /* PBUF_LINK_HLEN: the number of bytes that should be allocated for a
    link level header. */
@@ -179,6 +197,12 @@ extern unsigned char debug_flags;
 #define OCPROXY_TCP_RCV_SCALE   3               /* 262144 >> 3 < 65536 */
 #endif
 
+#if OCPROXY_TCP_SND_BYTES <= 0 || OCPROXY_TCP_WND_BYTES <= 0
+#error "OCPROXY_TCP_SND_BYTES and OCPROXY_TCP_WND_BYTES must be positive"
+#endif
+#if OCPROXY_TCP_SND_BYTES > 1000000000 || OCPROXY_TCP_WND_BYTES > 1000000000
+#error "OCPROXY_TCP_SND_BYTES and OCPROXY_TCP_WND_BYTES must not exceed 1,000,000,000"
+#endif
 #if OCPROXY_TCP_RCV_SCALE < 0 || OCPROXY_TCP_RCV_SCALE > 14
 #error "OCPROXY_TCP_RCV_SCALE must be between 0 and 14"
 #endif
