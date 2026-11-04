@@ -46,7 +46,7 @@
 #include <linux/if_tun.h>
 #include <net/if.h>
 #include <net/route.h>
-#include <sys/fcntl.h>
+#include <fcntl.h>
 #include <sys/inotify.h>
 #include <sys/ioctl.h>
 #include <sys/mount.h>

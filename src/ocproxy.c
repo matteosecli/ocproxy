@@ -279,10 +279,8 @@ static void start_resolution(struct ocp_sock *s, const char *hostname);
  * Utility functions / libevent wrappers
  **********************************************************************/
 
-/* Portable strcasestr for systems that don't have it */
-#ifndef __APPLE__
-#ifndef __GLIBC__
-static char *strcasestr(const char *haystack, const char *needle)
+/* Own strcasestr: not available (or declared differently) on every libc */
+static char *ocp_strcasestr(const char *haystack, const char *needle)
 {
 	size_t needle_len = strlen(needle);
 	if (needle_len == 0)
@@ -294,8 +292,6 @@ static char *strcasestr(const char *haystack, const char *needle)
 	}
 	return NULL;
 }
-#endif
-#endif
 
 static void die(const char *fmt, ...) __attribute__((format(printf, 1, 2))) __attribute__((noreturn));
 static void warn(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -911,7 +907,7 @@ static void http_req_cb(evutil_socket_t fd, short what, void *ctx)
 			}
 		} else {
 			/* Relative URL - need to find Host header */
-			host_header = strcasestr(s->sockbuf, "\r\nHost:");
+			host_header = ocp_strcasestr(s->sockbuf, "\r\nHost:");
 			if (!host_header) {
 				free(request_copy);
 				http_send_error(s, "400 Bad Request", "Missing Host header");
