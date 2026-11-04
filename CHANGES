@@ -1,4 +1,4 @@
-v2.0.0 - UNRELEASED
+v2.0.0 - 2026/11/04
 
  - Fork maintained at https://github.com/matteosecli/ocproxy
 
@@ -15,6 +15,8 @@ v2.0.0 - UNRELEASED
    sizes and heap budget
 
  - Add end-to-end test suite ("make check") and GitHub Actions CI/release
+
+ - Provide static musl (Alpine) binaries; fix build on musl libc
 
  - Have the vpnns watcher process re-create the bind mount if the underlying
    resolv.conf is deleted (e.g. by NetworkManager)
