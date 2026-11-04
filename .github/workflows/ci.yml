@@ -83,10 +83,53 @@ jobs:
           name: ocproxy-${{ matrix.name }}
           path: ocproxy-*.tar.gz
 
+  build-musl:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-musl-amd64, runner: ubuntu-24.04,     arch: amd64 }
+          - { name: linux-musl-arm64, runner: ubuntu-24.04-arm, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test in Alpine (static, musl)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src alpine:3 sh -ec '
+            apk add --no-cache build-base autoconf automake libtool pkgconf \
+              libevent-dev libevent-static python3 bash file linux-headers
+            ./autogen.sh
+            mkdir build-musl
+            cd build-musl
+            ../configure LDFLAGS=-static LIBS=-l:libevent.a
+            make -j4
+            make check VERBOSE=1
+            file ocproxy
+            chown -R '"$(id -u):$(id -g)"' /src
+          '
+
+      - name: Package
+        env:
+          RELEASE_TAG: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || '' }}
+        run: |
+          if [ -n "$RELEASE_TAG" ]; then ver="$RELEASE_TAG"; else ver="dev-${GITHUB_SHA::7}"; fi
+          name="ocproxy-${ver}-linux-musl-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp build-musl/ocproxy ocproxy.1 README.md CHANGES lwip/COPYING "dist/$name/"
+          if [ -x build-musl/vpnns ]; then cp build-musl/vpnns vpnns.1 "dist/$name/"; fi
+          tar -C dist -czf "$name.tar.gz" "$name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ocproxy-${{ matrix.name }}
+          path: ocproxy-*.tar.gz
+
   release:
     name: Attach binaries to release
     if: inputs.tag != '' || startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, build-musl]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
