@@ -33,13 +33,11 @@
 #define __LWIPOPTS_H__
 
 /*
- * Use the libc memory allocator.
+ * Use the lwIP fixed-size heap (MEM_SIZE bytes, carved out of .bss), and
+ * allocate all memp pools from that heap on demand.
  */
 #define MEM_LIBC_MALLOC         0
 #define MEMP_MEM_MALLOC         1
-
-/* <sys/time.h> is included in cc.h! */
-#define LWIP_TIMEVAL_PRIVATE    0
 
 #define LWIP_DBG_MIN_LEVEL      0
 #define LWIP_COMPAT_SOCKETS     0
@@ -79,11 +77,13 @@
 extern unsigned char debug_flags;
 #define LWIP_DBG_TYPES_ON       debug_flags
 
-#define NO_SYS                  0
+/* Raw API only: ocproxy drives lwIP from a single libevent loop. */
+#define NO_SYS                  1
 #define LWIP_SOCKET             0
 #define LWIP_NETCONN            0
+#define LWIP_NETIF_API          0
+#define LWIP_TCPIP_CORE_LOCKING 0
 
-#define LWIP_SO_RCVTIMEO        1
 #define LWIP_TCP_KEEPALIVE      1
 
 /* ---------- Memory options ---------- */
@@ -91,12 +91,19 @@ extern unsigned char debug_flags;
    lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2
    byte alignment -> define MEM_ALIGNMENT to 2. */
 /* MSVC port: intel processors don't need 4-byte alignment,
-   but are faster that way! */
-#define MEM_ALIGNMENT           4
+   but are faster that way! lwIP structs contain pointers, so 64-bit hosts
+   need at least 8 (4 triggers misaligned accesses; 8 is also fine on 32-bit). */
+#define MEM_ALIGNMENT           8
 
 /* MEM_SIZE: the size of the heap memory. If the application will send
    a lot of data that needs to be copied, this should be set high. */
-#define MEM_SIZE                1024000
+#ifndef OCPROXY_HEAP_BYTES
+#define OCPROXY_HEAP_BYTES      67108864        /* 64 MiB */
+#endif
+#define MEM_SIZE                OCPROXY_HEAP_BYTES
+#if OCPROXY_HEAP_BYTES <= 0 || OCPROXY_HEAP_BYTES > 1073741824
+#error "OCPROXY_HEAP_BYTES must be positive and no larger than 1 GiB"
+#endif
 
 /* MEMP_NUM_PBUF: the number of memp struct pbufs. If the application
    sends a lot of data out of ROM (or other static memory), this
@@ -114,9 +121,22 @@ extern unsigned char debug_flags;
 /* MEMP_NUM_TCP_PCB_LISTEN: the number of listening TCP
    connections. */
 #define MEMP_NUM_TCP_PCB_LISTEN 80
-/* MEMP_NUM_TCP_SEG: the number of simultaneously queued TCP
-   segments. */
-#define MEMP_NUM_TCP_SEG        1600
+/* MEMP_NUM_TCP_SEG and PBUF_POOL_SIZE describe the buffering target that
+   fits in half of the lwIP heap. The other half is left for TCP/IP metadata
+   and allocator overhead. With MEMP_MEM_MALLOC these are accounting targets,
+   not hard limits; MEM_SIZE remains the actual allocation limit. */
+#define OCPROXY_BUFFER_BYTES_PER_CONN \
+        (OCPROXY_TCP_SND_BYTES + OCPROXY_TCP_WND_BYTES)
+#define OCPROXY_BUFFERED_CONNECTIONS \
+        (((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) > MEMP_NUM_TCP_PCB ? \
+         MEMP_NUM_TCP_PCB : \
+         (((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) > 0 ? \
+          ((MEM_SIZE / 2) / OCPROXY_BUFFER_BYTES_PER_CONN) : 1))
+
+/* The target number of queued segments for the configured send-buffer budget. */
+#define MEMP_NUM_TCP_SEG \
+        (OCPROXY_BUFFERED_CONNECTIONS * \
+         ((OCPROXY_TCP_SND_BYTES + TCP_MSS - 1) / TCP_MSS))
 /* MEMP_NUM_SYS_TIMEOUT: the number of simulateously active
    timeouts. */
 #define MEMP_NUM_SYS_TIMEOUT    300
@@ -134,11 +154,13 @@ extern unsigned char debug_flags;
 #define MEMP_NUM_TCPIP_MSG_INPKT 1600
 
 /* ---------- Pbuf options ---------- */
-/* PBUF_POOL_SIZE: the number of buffers in the pbuf pool. */
-#define PBUF_POOL_SIZE          10000
-
 /* PBUF_POOL_BUFSIZE: the size of each pbuf in the pbuf pool. */
 #define PBUF_POOL_BUFSIZE       2048
+
+/* Pool target for receive-window data, based on the configured heap budget. */
+#define PBUF_POOL_SIZE \
+        (OCPROXY_BUFFERED_CONNECTIONS * \
+         ((OCPROXY_TCP_WND_BYTES + PBUF_POOL_BUFSIZE - 1) / PBUF_POOL_BUFSIZE))
 
 /* PBUF_LINK_HLEN: the number of bytes that should be allocated for a
    link level header. */
@@ -149,7 +171,7 @@ extern unsigned char debug_flags;
  * for certain critical regions during buffer allocation, deallocation and memory
  * allocation and deallocation.
  */
-#define SYS_LIGHTWEIGHT_PROT           1
+#define SYS_LIGHTWEIGHT_PROT           0
 
 /* ---------- TCP options ---------- */
 #define LWIP_TCP                1
@@ -162,8 +184,38 @@ extern unsigned char debug_flags;
 /* TCP Maximum segment size. */
 #define TCP_MSS                 1024
 
+/* Tunable TCP buffer sizes.  The receive window is larger than 64 KiB, so
+   window scaling is required: TCP_WND must fit in 16 bits after shifting
+   right by TCP_RCV_SCALE.  Override with -DOCPROXY_TCP_*=... if needed. */
+#ifndef OCPROXY_TCP_SND_BYTES
+#define OCPROXY_TCP_SND_BYTES   262144          /* 256 KiB per connection */
+#endif
+#ifndef OCPROXY_TCP_WND_BYTES
+#define OCPROXY_TCP_WND_BYTES   262144          /* 256 KiB receive window */
+#endif
+#ifndef OCPROXY_TCP_RCV_SCALE
+#define OCPROXY_TCP_RCV_SCALE   3               /* 262144 >> 3 < 65536 */
+#endif
+
+#if OCPROXY_TCP_SND_BYTES <= 0 || OCPROXY_TCP_WND_BYTES <= 0
+#error "OCPROXY_TCP_SND_BYTES and OCPROXY_TCP_WND_BYTES must be positive"
+#endif
+#if OCPROXY_TCP_SND_BYTES > 1000000000 || OCPROXY_TCP_WND_BYTES > 1000000000
+#error "OCPROXY_TCP_SND_BYTES and OCPROXY_TCP_WND_BYTES must not exceed 1,000,000,000"
+#endif
+#if OCPROXY_TCP_RCV_SCALE < 0 || OCPROXY_TCP_RCV_SCALE > 14
+#error "OCPROXY_TCP_RCV_SCALE must be between 0 and 14"
+#endif
+#if OCPROXY_TCP_WND_BYTES > (65535L << OCPROXY_TCP_RCV_SCALE) || \
+    (OCPROXY_TCP_WND_BYTES >> OCPROXY_TCP_RCV_SCALE) <= 0
+#error "OCPROXY_TCP_WND_BYTES is not representable with OCPROXY_TCP_RCV_SCALE"
+#endif
+
+#define LWIP_WND_SCALE          1
+#define TCP_RCV_SCALE           OCPROXY_TCP_RCV_SCALE
+
 /* TCP sender buffer space (bytes). */
-#define TCP_SND_BUF             65534 /* Match TCP_WND. */
+#define TCP_SND_BUF             OCPROXY_TCP_SND_BYTES
 
 /* TCP sender buffer space (pbufs). This must be at least = 2 *
    TCP_SND_BUF/TCP_MSS for things to work. */
@@ -175,15 +227,13 @@ extern unsigned char debug_flags;
 #define TCP_SNDLOWAT            (TCP_SND_BUF/8)
 
 /* TCP receive window. */
-#define TCP_WND                 65534 /* Avoid wrap. */
+#define TCP_WND                 OCPROXY_TCP_WND_BYTES
 
 /* Maximum number of retransmissions of data segments. */
 #define TCP_MAXRTX              12
 
 /* Maximum number of retransmissions of SYN segments. */
 #define TCP_SYNMAXRTX           4
-
-#define LWIP_TCPIP_CORE_LOCKING 1
 
 /* ---------- ARP options ---------- */
 #define LWIP_ARP                0

@@ -1,14 +1,12 @@
 AC_PREREQ([2.61])
-AC_INIT([ocproxy], [1.70], [dme@dme.org], [ocproxy], [https://github.com/cernekee/ocproxy])
+AC_INIT([ocproxy], [2.0.0], [dme@dme.org], [ocproxy], [https://github.com/matteosecli/ocproxy])
 AM_INIT_AUTOMAKE
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 AC_USE_SYSTEM_EXTENSIONS
-AC_GNU_SOURCE
 m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 AC_PROG_CC
-AC_PROG_CC_C99
 AC_CANONICAL_HOST
 AC_CONFIG_FILES([Makefile])
 

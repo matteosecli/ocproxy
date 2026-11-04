@@ -1,7 +1,9 @@
 #!/bin/bash
 
 gpgkey="BC0B0D65"
-ppaname="cernekee/ppa"
+# PPA upload is disabled until a PPA exists for this fork:
+#ppaname="cernekee/ppa"
+ppaname=""
 
 builddir=tmp.debian
 pkg=ocproxy
@@ -103,7 +105,7 @@ echo "--------"
 cat lintian.txt
 echo "--------"
 
-if [ -n "$uver" -a "$nosign" = "0" ]; then
+if [ -n "$uver" -a -n "$ppaname" -a "$nosign" = "0" ]; then
 	echo ""
 	echo "UPLOAD COMMAND:"
 	echo ""

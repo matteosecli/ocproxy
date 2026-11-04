@@ -28,7 +28,7 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "lwip/opt.h"
+#include "netif/ppp/ppp_opts.h"
 #if PPP_SUPPORT && DEMAND_SUPPORT  /* don't build if not configured for use in lwipopts.h */
 
 #include <stdio.h>
@@ -86,8 +86,8 @@ demand_conf()
     const struct protent *protp;
 
 /*    framemax = lcp_allowoptions[0].mru;
-    if (framemax < PPP_MRU) */
-	framemax = PPP_MRU;
+    if (framemax < PPP_DEFMRU) */
+	framemax = PPP_DEFMRU;
     framemax += PPP_HDRLEN + PPP_FCSLEN;
     frame = malloc(framemax);
     if (frame == NULL)
@@ -98,9 +98,9 @@ demand_conf()
     flush_flag = 0;
     fcs = PPP_INITFCS;
 
-    netif_set_mtu(pcb, LWIP_MIN(lcp_allowoptions[0].mru, PPP_MRU));
-    if (ppp_send_config(pcb, PPP_MRU, (u32_t) 0, 0, 0) < 0
-	|| ppp_recv_config(pcb, PPP_MRU, (u32_t) 0, 0, 0) < 0)
+    ppp_netif_set_mtu(pcb, LWIP_MIN(lcp_allowoptions[0].mru, PPP_DEFMRU));
+    if (ppp_send_config(pcb, PPP_DEFMRU, (u32_t) 0, 0, 0) < 0
+	|| ppp_recv_config(pcb, PPP_DEFMRU, (u32_t) 0, 0, 0) < 0)
 	    fatal("Couldn't set up demand-dialled PPP interface: %m");
 
 #ifdef PPP_FILTER
@@ -111,7 +111,7 @@ demand_conf()
      * Call the demand_conf procedure for each protocol that's got one.
      */
     for (i = 0; (protp = protocols[i]) != NULL; ++i)
-	if (protp->enabled_flag && protp->demand_conf != NULL)
+	if (protp->demand_conf != NULL)
 	    ((*protp->demand_conf)(pcb));
 /* FIXME: find a way to die() here */
 #if 0
@@ -131,7 +131,7 @@ demand_block()
     const struct protent *protp;
 
     for (i = 0; (protp = protocols[i]) != NULL; ++i)
-	if (protp->enabled_flag && protp->demand_conf != NULL)
+	if (protp->demand_conf != NULL)
 	    sifnpmode(pcb, protp->protocol & ~0x8000, NPMODE_QUEUE);
     get_loop_output();
 }
@@ -148,7 +148,7 @@ demand_discard()
     const struct protent *protp;
 
     for (i = 0; (protp = protocols[i]) != NULL; ++i)
-	if (protp->enabled_flag && protp->demand_conf != NULL)
+	if (protp->demand_conf != NULL)
 	    sifnpmode(pcb, protp->protocol & ~0x8000, NPMODE_ERROR);
     get_loop_output();
 
@@ -174,7 +174,7 @@ demand_unblock()
     const struct protent *protp;
 
     for (i = 0; (protp = protocols[i]) != NULL; ++i)
-	if (protp->enabled_flag && protp->demand_conf != NULL)
+	if (protp->demand_conf != NULL)
 	    sifnpmode(pcb, protp->protocol & ~0x8000, NPMODE_PASS);
 }
 
@@ -454,8 +454,6 @@ active_packet(p, len)
 #endif
     for (i = 0; (protp = protocols[i]) != NULL; ++i) {
 	if (protp->protocol < 0xC000 && (protp->protocol & ~0x8000) == proto) {
-	    if (!protp->enabled_flag)
-		return 0;
 	    if (protp->active_pkt == NULL)
 		return 1;
 	    return (*protp->active_pkt)(p, len);

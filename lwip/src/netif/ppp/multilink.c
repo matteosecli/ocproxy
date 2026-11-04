@@ -28,8 +28,8 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "lwip/opt.h"
-#if PPP_SUPPORT && HAVE_MULTILINK /* don't build if not configured for use in lwipopts.h */
+#include "netif/ppp/ppp_opts.h"
+#if PPP_SUPPORT && defined(HAVE_MULTILINK) /* don't build if not configured for use in lwipopts.h */
 
 /* Multilink support
  *
@@ -142,18 +142,18 @@ mp_join_bundle()
 		/* not doing multilink */
 		if (go->neg_mrru)
 			notice("oops, multilink negotiated only for receive");
-		mtu = ho->neg_mru? ho->mru: PPP_MRU;
+		mtu = ho->neg_mru? ho->mru: PPP_DEFMRU;
 		if (mtu > ao->mru)
 			mtu = ao->mru;
 		if (demand) {
 			/* already have a bundle */
 			cfg_bundle(0, 0, 0, 0);
-			netif_set_mtu(pcb, mtu);
+			ppp_netif_set_mtu(pcb, mtu);
 			return 0;
 		}
 		make_new_bundle(0, 0, 0, 0);
 		set_ifunit(1);
-		netif_set_mtu(pcb, mtu);
+		ppp_netif_set_mtu(pcb, mtu);
 		return 0;
 	}
 
@@ -198,7 +198,7 @@ mp_join_bundle()
 	mtu = LWIP_MIN(ho->mrru, ao->mru);
 	if (demand) {
 		cfg_bundle(go->mrru, ho->mrru, go->neg_ssnhf, ho->neg_ssnhf);
-		netif_set_mtu(pcb, mtu);
+		ppp_netif_set_mtu(pcb, mtu);
 		script_setenv("BUNDLE", bundle_id + 7, 1);
 		return 0;
 	}
@@ -245,7 +245,7 @@ mp_join_bundle()
 	/* we have to make a new bundle */
 	make_new_bundle(go->mrru, ho->mrru, go->neg_ssnhf, ho->neg_ssnhf);
 	set_ifunit(1);
-	netif_set_mtu(pcb, mtu);
+	ppp_netif_set_mtu(pcb, mtu);
 	script_setenv("BUNDLE", bundle_id + 7, 1);
 	make_bundle_links(pcb);
 	unlock_db();
@@ -469,7 +469,7 @@ get_default_epdisc(ep)
 	if (hp != NULL) {
 		addr = *(u32_t *)hp->h_addr;
 		if (!bad_ip_adrs(addr)) {
-			addr = ntohl(addr);
+			addr = lwip_ntohl(addr);
 			if (!LOCAL_IP_ADDR(addr)) {
 				ep->class = EPD_IP;
 				set_ip_epdisc(ep, addr);
@@ -504,7 +504,7 @@ epdisc_to_str(ep)
 		u32_t addr;
 
 		GETLONG(addr, p);
-		slprintf(str, sizeof(str), "IP:%I", htonl(addr));
+		slprintf(str, sizeof(str), "IP:%I", lwip_htonl(addr));
 		return str;
 	}
 

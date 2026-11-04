@@ -68,7 +68,7 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "lwip/opt.h"
+#include "netif/ppp/ppp_opts.h"
 #if PPP_SUPPORT /* don't build if not configured for use in lwipopts.h */
 
 #if 0 /* UNUSED */
@@ -546,6 +546,7 @@ set_permitted_number(argv)
  * An Open on LCP has requested a change from Dead to Establish phase.
  */
 void link_required(ppp_pcb *pcb) {
+    LWIP_UNUSED_ARG(pcb);
 }
 
 #if 0
@@ -590,9 +591,9 @@ void start_link(unit)
      * incoming events (reply, timeout, etc.).
      */
     if (ifunit >= 0)
-	ppp_notice("Connect: %s <--> %s", ifname, ppp_devnam);
+	ppp_notice(("Connect: %s <--> %s", ifname, ppp_devnam));
     else
-	ppp_notice("Starting negotiation on %s", ppp_devnam);
+	ppp_notice(("Starting negotiation on %s", ppp_devnam));
     add_fd(fd_ppp);
 
     new_phase(pcb, PPP_PHASE_ESTABLISH);
@@ -617,7 +618,11 @@ void start_link(unit)
  * physical layer down.
  */
 void link_terminated(ppp_pcb *pcb) {
-    if (pcb->phase == PPP_PHASE_DEAD || pcb->phase == PPP_PHASE_MASTER)
+    if (pcb->phase == PPP_PHASE_DEAD
+#ifdef HAVE_MULTILINK
+    || pcb->phase == PPP_PHASE_MASTER
+#endif /* HAVE_MULTILINK */
+    )
 	return;
     new_phase(pcb, PPP_PHASE_DISCONNECT);
 
@@ -629,16 +634,15 @@ void link_terminated(ppp_pcb *pcb) {
 #endif /* UNUSED */
 
     if (!doing_multilink) {
-	ppp_notice("Connection terminated.");
+	ppp_notice(("Connection terminated."));
 #if PPP_STATS_SUPPORT
 	print_link_stats();
 #endif /* PPP_STATS_SUPPORT */
     } else
-	ppp_notice("Link terminated.");
+	ppp_notice(("Link terminated."));
 
     lcp_lowerdown(pcb);
 
-    new_phase(pcb, PPP_PHASE_DEAD);
     ppp_link_terminated(pcb);
 #if 0
     /*
@@ -698,13 +702,15 @@ void link_down(ppp_pcb *pcb) {
 
     if (!doing_multilink) {
 	upper_layers_down(pcb);
-	if (pcb->phase != PPP_PHASE_DEAD && pcb->phase != PPP_PHASE_MASTER)
+	if (pcb->phase != PPP_PHASE_DEAD
+#ifdef HAVE_MULTILINK
+	&& pcb->phase != PPP_PHASE_MASTER
+#endif /* HAVE_MULTILINK */
+	)
 	    new_phase(pcb, PPP_PHASE_ESTABLISH);
     }
     /* XXX if doing_multilink, should do something to stop
        network-layer traffic on the link */
-
-    ppp_link_down(pcb);
 }
 
 void upper_layers_down(ppp_pcb *pcb) {
@@ -712,8 +718,6 @@ void upper_layers_down(ppp_pcb *pcb) {
     const struct protent *protp;
 
     for (i = 0; (protp = protocols[i]) != NULL; ++i) {
-	if (!protp->enabled_flag)
-	    continue;
         if (protp->protocol != PPP_LCP && protp->lowerdown != NULL)
 	    (*protp->lowerdown)(pcb);
         if (protp->protocol < 0xC000 && protp->close != NULL)
@@ -728,28 +732,30 @@ void upper_layers_down(ppp_pcb *pcb) {
  * Proceed to the Dead, Authenticate or Network phase as appropriate.
  */
 void link_established(ppp_pcb *pcb) {
+#if PPP_AUTH_SUPPORT
     int auth;
 #if PPP_SERVER
+#if PAP_SUPPORT
     lcp_options *wo = &pcb->lcp_wantoptions;
+#endif /* PAP_SUPPORT */
     lcp_options *go = &pcb->lcp_gotoptions;
 #endif /* PPP_SERVER */
     lcp_options *ho = &pcb->lcp_hisoptions;
+#endif /* PPP_AUTH_SUPPORT */
     int i;
     const struct protent *protp;
-#if PPP_SERVER
-    int errcode;
-#endif /* PPP_SERVER */
 
     /*
      * Tell higher-level protocols that LCP is up.
      */
     if (!doing_multilink) {
 	for (i = 0; (protp = protocols[i]) != NULL; ++i)
-	    if (protp->protocol != PPP_LCP && protp->enabled_flag
+	    if (protp->protocol != PPP_LCP
 		&& protp->lowerup != NULL)
 		(*protp->lowerup)(pcb);
     }
 
+#if PPP_AUTH_SUPPORT
 #if PPP_SERVER
 #if PPP_ALLOWED_ADDRS
     if (!auth_required && noauth_addrs != NULL)
@@ -780,13 +786,16 @@ void link_established(ppp_pcb *pcb) {
 	    set_allowed_addrs(unit, NULL, NULL);
 	} else
 #endif /* PPP_ALLOWED_ADDRS */
-	if (!wo->neg_upap || !pcb->settings.null_login) {
-	    ppp_warn("peer refused to authenticate: terminating link");
+	if (!pcb->settings.null_login
+#if PAP_SUPPORT
+	    || !wo->neg_upap
+#endif /* PAP_SUPPORT */
+	    ) {
+	    ppp_warn(("peer refused to authenticate: terminating link"));
 #if 0 /* UNUSED */
 	    status = EXIT_PEER_AUTH_FAILED;
 #endif /* UNUSED */
-	    errcode = PPPERR_AUTHFAIL;
-	    ppp_ioctl(pcb, PPPCTLS_ERRCODE, &errcode);
+	    pcb->err_code = PPPERR_AUTHFAIL;
 	    lcp_close(pcb, "peer refused to authenticate");
 	    return;
 	}
@@ -798,13 +807,13 @@ void link_established(ppp_pcb *pcb) {
 #if PPP_SERVER
 #if EAP_SUPPORT
     if (go->neg_eap) {
-	eap_authpeer(pcb, pcb->settings.our_name);
+	eap_authpeer(pcb, PPP_OUR_NAME);
 	auth |= EAP_PEER;
     } else
 #endif /* EAP_SUPPORT */
 #if CHAP_SUPPORT
     if (go->neg_chap) {
-	chap_auth_peer(pcb, pcb->settings.our_name, CHAP_DIGEST(go->chap_mdtype));
+	chap_auth_peer(pcb, PPP_OUR_NAME, CHAP_DIGEST(go->chap_mdtype));
 	auth |= CHAP_PEER;
     } else
 #endif /* CHAP_SUPPORT */
@@ -841,7 +850,7 @@ void link_established(ppp_pcb *pcb) {
     pcb->auth_done = 0;
 
     if (!auth)
-
+#endif /* PPP_AUTH_SUPPORT */
 	network_phase(pcb);
 }
 
@@ -859,7 +868,7 @@ static void network_phase(ppp_pcb *pcb) {
 #if 0 /* UNUSED */
     /* Log calling number. */
     if (*remote_number)
-	ppp_notice("peer from calling number %q authorized", remote_number);
+	ppp_notice(("peer from calling number %q authorized", remote_number));
 #endif /* UNUSED */
 
 #if PPP_NOTIFY
@@ -910,12 +919,6 @@ void start_networks(ppp_pcb *pcb) {
     int i;
     const struct protent *protp;
 #endif /* CCP_SUPPORT || ECP_SUPPORT */
-#if ECP_SUPPORT
-    int ecp_required;
-#endif /* ECP_SUPPORT */
-#ifdef MPPE
-    int mppe_required;
-#endif /* MPPE */
 
     new_phase(pcb, PPP_PHASE_NETWORK);
 
@@ -947,27 +950,20 @@ void start_networks(ppp_pcb *pcb) {
 	    || protp->protocol == PPP_CCP
 #endif /* CCP_SUPPORT */
 	    )
-	    && protp->enabled_flag && protp->open != NULL)
+	    && protp->open != NULL)
 	    (*protp->open)(pcb);
 #endif /* CCP_SUPPORT || ECP_SUPPORT */
 
     /*
      * Bring up other network protocols iff encryption is not required.
      */
-#if ECP_SUPPORT
-    ecp_required = ecp_gotoptions[unit].required;
-#endif /* ECP_SUPPORT */
-#ifdef MPPE
-    mppe_required = ccp_gotoptions[unit].mppe;
-#endif /* MPPE */
-
     if (1
 #if ECP_SUPPORT
-        && !ecp_required
+        && !ecp_gotoptions[unit].required
 #endif /* ECP_SUPPORT */
-#ifdef MPPE
-        && !mppe_required
-#endif /* MPPE */
+#if MPPE_SUPPORT
+        && !pcb->ccp_gotoptions.mppe
+#endif /* MPPE_SUPPORT */
         )
 	continue_networks(pcb);
 }
@@ -987,7 +983,7 @@ void continue_networks(ppp_pcb *pcb) {
 #if ECP_SUPPORT
 	    && protp->protocol != PPP_ECP
 #endif /* ECP_SUPPORT */
-	    && protp->enabled_flag && protp->open != NULL) {
+	    && protp->open != NULL) {
 	    (*protp->open)(pcb);
 	    ++pcb->num_np_open;
 	}
@@ -997,27 +993,63 @@ void continue_networks(ppp_pcb *pcb) {
 	lcp_close(pcb, "No network protocols running");
 }
 
+#if PPP_AUTH_SUPPORT
 #if PPP_SERVER
+/*
+ * auth_check_passwd - Check the user name and passwd against configuration.
+ *
+ * returns:
+ *      0: Authentication failed.
+ *      1: Authentication succeeded.
+ * In either case, msg points to an appropriate message and msglen to the message len.
+ */
+int auth_check_passwd(ppp_pcb *pcb, char *auser, unsigned int userlen, char *apasswd, unsigned int passwdlen, const char **msg, int *msglen) {
+  size_t secretuserlen;
+  size_t secretpasswdlen;
+
+  if (pcb->settings.user && pcb->settings.passwd) {
+    secretuserlen = strlen(pcb->settings.user);
+    secretpasswdlen = strlen(pcb->settings.passwd);
+    if (secretuserlen == userlen
+        && secretpasswdlen == passwdlen
+        && !lwip_memcmp_consttime(auser, pcb->settings.user, userlen)
+        && !lwip_memcmp_consttime(apasswd, pcb->settings.passwd, passwdlen) ) {
+      *msg = "Login ok";
+      *msglen = sizeof("Login ok")-1;
+      return 1;
+    }
+  }
+
+  *msg = "Login incorrect";
+  *msglen = sizeof("Login incorrect")-1;
+  return 0;
+}
+
 /*
  * The peer has failed to authenticate himself using `protocol'.
  */
 void auth_peer_fail(ppp_pcb *pcb, int protocol) {
-    int errcode = PPPERR_AUTHFAIL;
+    LWIP_UNUSED_ARG(protocol);
     /*
      * Authentication failure: take the link down
      */
 #if 0 /* UNUSED */
     status = EXIT_PEER_AUTH_FAILED;
 #endif /* UNUSED */
-    ppp_ioctl(pcb, PPPCTLS_ERRCODE, &errcode);
+    pcb->err_code = PPPERR_AUTHFAIL;
     lcp_close(pcb, "Authentication failed");
 }
 
 /*
  * The peer has been successfully authenticated using `protocol'.
  */
-void auth_peer_success(ppp_pcb *pcb, int protocol, int prot_flavor, char *name, int namelen) {
+void auth_peer_success(ppp_pcb *pcb, int protocol, int prot_flavor, const char *name, int namelen) {
     int bit;
+#ifndef HAVE_MULTILINK
+    LWIP_UNUSED_ARG(name);
+    LWIP_UNUSED_ARG(namelen);
+#endif /* HAVE_MULTILINK */
+    LWIP_UNUSED_ARG(prot_flavor); /* if CHAP_SUPPORT is disabled */
 
     switch (protocol) {
 #if CHAP_SUPPORT
@@ -1035,6 +1067,8 @@ void auth_peer_success(ppp_pcb *pcb, int protocol, int prot_flavor, char *name, 
 	    bit |= CHAP_MS2_PEER;
 	    break;
 #endif /* MSCHAP_SUPPORT */
+	default:
+	    break;
 	}
 	break;
 #endif /* CHAP_SUPPORT */
@@ -1049,18 +1083,19 @@ void auth_peer_success(ppp_pcb *pcb, int protocol, int prot_flavor, char *name, 
 	break;
 #endif /* EAP_SUPPORT */
     default:
-	ppp_warn("auth_peer_success: unknown protocol %x", protocol);
+	ppp_warn(("auth_peer_success: unknown protocol %x", protocol));
 	return;
     }
 
+#ifdef HAVE_MULTILINK
     /*
      * Save the authenticated name of the peer for later.
      */
-    /* FIXME: do we need that ? */
-    if (namelen > sizeof(pcb->peer_authname) - 1)
-	namelen = sizeof(pcb->peer_authname) - 1;
+    if (namelen > (int)sizeof(pcb->peer_authname) - 1)
+	namelen = (int)sizeof(pcb->peer_authname) - 1;
     MEMCPY(pcb->peer_authname, name, namelen);
     pcb->peer_authname[namelen] = 0;
+#endif /* HAVE_MULTILINK */
 #if 0 /* UNUSED */
     script_setenv("PEERNAME", , 0);
 #endif /* UNUSED */
@@ -1081,7 +1116,7 @@ void auth_peer_success(ppp_pcb *pcb, int protocol, int prot_flavor, char *name, 
  * We have failed to authenticate ourselves to the peer using `protocol'.
  */
 void auth_withpeer_fail(ppp_pcb *pcb, int protocol) {
-    int errcode = PPPERR_AUTHFAIL;
+    LWIP_UNUSED_ARG(protocol);
     /*
      * We've failed to authenticate ourselves to our peer.
      *
@@ -1092,7 +1127,7 @@ void auth_withpeer_fail(ppp_pcb *pcb, int protocol) {
      * He'll probably take the link down, and there's not much
      * we can do except wait for that.
      */
-    ppp_ioctl(pcb, PPPCTLS_ERRCODE, &errcode);
+    pcb->err_code = PPPERR_AUTHFAIL;
     lcp_close(pcb, "Failed to authenticate ourselves to peer");
 }
 
@@ -1102,6 +1137,7 @@ void auth_withpeer_fail(ppp_pcb *pcb, int protocol) {
 void auth_withpeer_success(ppp_pcb *pcb, int protocol, int prot_flavor) {
     int bit;
     const char *prot = "";
+    LWIP_UNUSED_ARG(prot_flavor); /* if CHAP_SUPPORT is disabled */
 
     switch (protocol) {
 #if CHAP_SUPPORT
@@ -1120,6 +1156,8 @@ void auth_withpeer_success(ppp_pcb *pcb, int protocol, int prot_flavor) {
 	    bit |= CHAP_MS2_WITHPEER;
 	    break;
 #endif /* MSCHAP_SUPPORT */
+	default:
+	    break;
 	}
 	break;
 #endif /* CHAP_SUPPORT */
@@ -1136,12 +1174,12 @@ void auth_withpeer_success(ppp_pcb *pcb, int protocol, int prot_flavor) {
 	break;
 #endif /* EAP_SUPPORT */
     default:
-	ppp_warn("auth_withpeer_success: unknown protocol %x", protocol);
+	ppp_warn(("auth_withpeer_success: unknown protocol %x", protocol));
 	bit = 0;
 	/* no break */
     }
 
-    ppp_notice("%s authentication succeeded", prot);
+    ppp_notice(("%s authentication succeeded", prot));
 
     /* Save the authentication method for later. */
     pcb->auth_done |= bit;
@@ -1153,6 +1191,7 @@ void auth_withpeer_success(ppp_pcb *pcb, int protocol, int prot_flavor) {
     if ((pcb->auth_pending &= ~bit) == 0)
 	network_phase(pcb);
 }
+#endif /* PPP_AUTH_SUPPORT */
 
 
 /*
@@ -1162,6 +1201,7 @@ void np_up(ppp_pcb *pcb, int proto) {
 #if PPP_IDLETIMELIMIT
     int tlim;
 #endif /* PPP_IDLETIMELIMIT */
+    LWIP_UNUSED_ARG(proto);
 
     if (pcb->num_np_up == 0) {
 	/*
@@ -1209,6 +1249,7 @@ void np_up(ppp_pcb *pcb, int proto) {
  * np_down - a network protocol has gone down.
  */
 void np_down(ppp_pcb *pcb, int proto) {
+    LWIP_UNUSED_ARG(proto);
     if (--pcb->num_np_up == 0) {
 #if PPP_IDLETIMELIMIT
 	UNTIMEOUT(check_idle, (void*)pcb);
@@ -1227,6 +1268,7 @@ void np_down(ppp_pcb *pcb, int proto) {
  * np_finished - a network protocol has finished using the link.
  */
 void np_finished(ppp_pcb *pcb, int proto) {
+    LWIP_UNUSED_ARG(proto);
     if (--pcb->num_np_open <= 0) {
 	/* no further use for the link: shut up shop. */
 	lcp_close(pcb, "No network protocols running");
@@ -1260,7 +1302,7 @@ check_maxoctets(arg)
 	    break;
     }
     if (used > maxoctets) {
-	ppp_notice("Traffic limit reached. Limit: %u Used: %u", maxoctets, used);
+	ppp_notice(("Traffic limit reached. Limit: %u Used: %u", maxoctets, used));
 	status = EXIT_TRAFFIC_LIMIT;
 	lcp_close(pcb, "Traffic limit");
 #if 0 /* UNUSED */
@@ -1297,10 +1339,9 @@ static void check_idle(void *arg) {
     }
 #endif /* UNUSED */
     if (tlim <= 0) {
-	int errcode = PPPERR_IDLETIMEOUT;
 	/* link is idle: shut it down. */
-	ppp_notice("Terminating connection due to lack of activity.");
-	ppp_ioctl(pcb, PPPCTLS_ERRCODE, &errcode);
+	ppp_notice(("Terminating connection due to lack of activity."));
+	pcb->err_code = PPPERR_IDLETIMEOUT;
 	lcp_close(pcb, "Link inactive");
 #if 0 /* UNUSED */
 	need_holdoff = 0;
@@ -1316,10 +1357,9 @@ static void check_idle(void *arg) {
  * connect_time_expired - log a message and close the connection.
  */
 static void connect_time_expired(void *arg) {
-    int errcode = PPPERR_CONNECTTIME;
     ppp_pcb *pcb = (ppp_pcb*)arg;
-    ppp_info("Connect time expired");
-    ppp_ioctl(pcb, PPPCTLS_ERRCODE, &errcode);
+    ppp_info(("Connect time expired"));
+    pcb->err_code = PPPERR_CONNECTTIME;
     lcp_close(pcb, "Connect time expired");	/* Close connection */
 }
 #endif /* PPP_MAXCONNECT */
@@ -1457,115 +1497,46 @@ auth_check_options()
      * Early check for remote number authorization.
      */
     if (!auth_number()) {
-	ppp_warn("calling number %q is not authorized", remote_number);
+	ppp_warn(("calling number %q is not authorized", remote_number));
 	exit(EXIT_CNID_AUTH_FAILED);
     }
 }
 #endif /* PPP_OPTIONS */
 
+#if 0 /* UNUSED */
 /*
  * auth_reset - called when LCP is starting negotiations to recheck
  * authentication options, i.e. whether we have appropriate secrets
  * to use for authenticating ourselves and/or the peer.
  */
-void auth_reset(ppp_pcb *pcb) {
-  lcp_options *go = &pcb->lcp_gotoptions;
-  lcp_options *ao = &pcb->lcp_allowoptions;
+void
+auth_reset(unit)
+    int unit;
+{
+    lcp_options *go = &lcp_gotoptions[unit];
+    lcp_options *ao = &lcp_allowoptions[unit];
+    int hadchap;
 
-  if(pcb->settings.passwd) {
-
-#if PAP_SUPPORT
-    ao->neg_upap = !pcb->settings.refuse_pap;
-#endif /* PAP_SUPPORT */
-
-#if EAP_SUPPORT
-    ao->neg_eap = !pcb->settings.refuse_eap;
-#endif /* EAP_SUPPORT */
-
-#if CHAP_SUPPORT
-    ao->chap_mdtype = MDTYPE_NONE;
-    if(!pcb->settings.refuse_chap)
-      ao->chap_mdtype |= MDTYPE_MD5;
-#if MSCHAP_SUPPORT
-    if(!pcb->settings.refuse_mschap)
-      ao->chap_mdtype |= MDTYPE_MICROSOFT;
-    if(!pcb->settings.refuse_mschap_v2)
-      ao->chap_mdtype |= MDTYPE_MICROSOFT_V2;
-#endif /* MSCHAP_SUPPORT */
-
-    ao->neg_chap = (ao->chap_mdtype != MDTYPE_NONE);
-#endif /* CHAP_SUPPORT */
-
-  } else {
-#if PAP_SUPPORT
-    ao->neg_upap = 0;
-#endif /* PAP_SUPPORT */
-#if CHAP_SUPPORT
-    ao->neg_chap = 0;
-    ao->chap_mdtype = MDTYPE_NONE;
-#endif /* CHAP_SUPPORT */
-#if EAP_SUPPORT
-    ao->neg_eap = 0;
-#endif /* EAP_SUPPORT */
-  }
-
-#if PAP_SUPPORT
-  PPPDEBUG(LOG_DEBUG, ("neg_upap: %d\n", ao->neg_upap) );
-#endif /* PAP_SUPPORT */
-#if CHAP_SUPPORT
-  PPPDEBUG(LOG_DEBUG, ("neg_chap: %d\n", ao->neg_chap) );
-  PPPDEBUG(LOG_DEBUG, ("neg_chap_md5: %d\n", !!(ao->chap_mdtype&MDTYPE_MD5)) );
-#if MSCHAP_SUPPORT
-  PPPDEBUG(LOG_DEBUG, ("neg_chap_ms: %d\n", !!(ao->chap_mdtype&MDTYPE_MICROSOFT)) );
-  PPPDEBUG(LOG_DEBUG, ("neg_chap_ms2: %d\n", !!(ao->chap_mdtype&MDTYPE_MICROSOFT_V2)) );
-#endif /* MSCHAP_SUPPORT */
-#endif /* CHAP_SUPPORT */
-#if EAP_SUPPORT
-  PPPDEBUG(LOG_DEBUG, ("neg_eap: %d\n", ao->neg_eap) );
-#endif /* EAP_SUPPORT */
-
-#if 0 /* OLD CODE */
-    ao->neg_upap = !ppp_settings.refuse_pap && (ppp_settings.passwd[0] != 0 || get_pap_passwd(NULL));
-
-    /*
-    ao->neg_chap = (!ppp_settings.refuse_chap || !refuse_mschap || !refuse_mschap_v2)
+    hadchap = -1;
+    ao->neg_upap = !refuse_pap && (passwd[0] != 0 || get_pap_passwd(NULL));
+    ao->neg_chap = (!refuse_chap || !refuse_mschap || !refuse_mschap_v2)
 	&& (passwd[0] != 0 ||
 	    (hadchap = have_chap_secret(user, (explicit_remote? remote_name:
-					       NULL), 0, NULL))); */
-    /*
+					       NULL), 0, NULL)));
     ao->neg_eap = !refuse_eap && (
 	passwd[0] != 0 ||
-	(hadchap == 1 || (hadchap == -1 && have_chap_secret(ppp_settings.user,
+	(hadchap == 1 || (hadchap == -1 && have_chap_secret(user,
 	    (explicit_remote? remote_name: NULL), 0, NULL))) ||
-	have_srp_secret(ppp_settings.user, (explicit_remote? remote_name: NULL), 0, NULL)); */
-#endif /* OLD CODE */
-
-#if PAP_SUPPORT
-  go->neg_upap = 0;
-#endif /* PAP_SUPPORT */
-#if CHAP_SUPPORT
-  go->neg_chap = 0;
-  go->chap_mdtype = MDTYPE_NONE;
-#endif /* CHAP_SUPPORT */
-#if EAP_SUPPORT
-  go->neg_eap = 0;
-#endif /* EAP_SUPPORT */
-  return;
-#if 0
-    /* FIXME: find what the below stuff do */
-    int hadchap;
-    hadchap = -1;
+	have_srp_secret(user, (explicit_remote? remote_name: NULL), 0, NULL));
 
     hadchap = -1;
     if (go->neg_upap && !uselogin && !have_pap_secret(NULL))
 	go->neg_upap = 0;
-
     if (go->neg_chap) {
 	if (!(hadchap = have_chap_secret((explicit_remote? remote_name: NULL),
 			      our_name, 1, NULL)))
 	    go->neg_chap = 0;
     }
-
     if (go->neg_eap &&
 	(hadchap == 0 || (hadchap == -1 &&
 	    !have_chap_secret((explicit_remote? remote_name: NULL), our_name,
@@ -1573,10 +1544,8 @@ void auth_reset(ppp_pcb *pcb) {
 	!have_srp_secret((explicit_remote? remote_name: NULL), our_name, 1,
 	    NULL))
 	go->neg_eap = 0;
-#endif
 }
 
-#if 0 /* UNUSED */
 /*
  * check_passwd - Check the user name and passwd against the PAP secrets
  * file.  If requested, also check against the system password database,
@@ -1642,12 +1611,12 @@ check_passwd(unit, auser, userlen, apasswd, passwdlen, msg)
     ret = UPAP_AUTHNAK;
     f = fopen(filename, "r");
     if (f == NULL) {
-	ppp_error("Can't open PAP password file %s: %m", filename);
+	ppp_error(("Can't open PAP password file %s: %m", filename));
 
     } else {
 	check_access(f, filename);
 	if (scan_authfile(f, ppp_settings.user, our_name, secret, &addrs, &opts, filename, 0) < 0) {
-	    ppp_warn("no PAP secret found for %s", user);
+	    ppp_warn(("no PAP secret found for %s", user));
 	} else {
 	    /*
 	     * If the secret is "@login", it means to check
@@ -1662,7 +1631,7 @@ check_passwd(unit, auser, userlen, apasswd, passwdlen, msg)
 		}
 	    } else if (session_mgmt) {
 		if (session_check(ppp_settings.user, NULL, devnam, NULL) == 0) {
-		    ppp_warn("Peer %q failed PAP Session verification", user);
+		    ppp_warn(("Peer %q failed PAP Session verification", user));
 		    ret = UPAP_AUTHNAK;
 		}
 	    }
@@ -1686,7 +1655,7 @@ check_passwd(unit, auser, userlen, apasswd, passwdlen, msg)
 	 * On 10'th, drop the connection.
 	 */
 	if (attempts++ >= 10) {
-	    ppp_warn("%d LOGIN FAILURES ON %s, %s", attempts, devnam, user);
+	    ppp_warn(("%d LOGIN FAILURES ON %s, %s", attempts, devnam, user));
 	    lcp_close(pcb, "login failed");
 	}
 	if (attempts > 3)
@@ -1928,45 +1897,35 @@ have_srp_secret(client, server, need_ip, lacks_ipp)
 }
 #endif /* UNUSED */
 
+#if PPP_AUTH_SUPPORT
 /*
  * get_secret - open the CHAP secret file and return the secret
  * for authenticating the given client on the given server.
  * (We could be either client or server).
  */
-int get_secret(ppp_pcb *pcb, char *client, char *server, char *secret, int *secret_len, int am_server) {
-  int len;
-
+int get_secret(ppp_pcb *pcb, const char *client, const char *server, char *secret, int *secret_len, int am_server) {
+  size_t len;
   LWIP_UNUSED_ARG(server);
   LWIP_UNUSED_ARG(am_server);
 
-  if(!client || !client[0] || !pcb->settings.user || !pcb->settings.passwd || strcmp(client, pcb->settings.user)) {
+  if (!client || !client[0] || !pcb->settings.user || !pcb->settings.passwd || strcmp(client, pcb->settings.user)) {
     return 0;
   }
 
-  len = (int)strlen(pcb->settings.passwd);
+  len = strlen(pcb->settings.passwd);
   if (len > MAXSECRETLEN) {
-    ppp_error("Secret for %s on %s is too long", client, server);
+    ppp_error(("Secret for %s on %s is too long", client, server));
     len = MAXSECRETLEN;
   }
 
   MEMCPY(secret, pcb->settings.passwd, len);
   *secret_len = len;
-
   return 1;
 
-/* FIXME: clean that */
-#if 0
-	    	strlcpy(rname, ppp_settings.user, sizeof(rname));
-
-
-/*
-		strlcpy(rname, ppp_settings.user, sizeof(rname));
-		strlcpy(secret, ppp_settings.passwd, sizeof(secret));
-		secret_len = strlen(secret);
-*/
-
+#if 0 /* UNUSED */
     FILE *f;
-    int ret, len;
+    int ret;
+    size_t len;
     char *filename;
     struct wordlist *addrs, *opts;
     char secbuf[MAXWORDLEN];
@@ -1977,8 +1936,8 @@ int get_secret(ppp_pcb *pcb, char *client, char *server, char *secret, int *secr
 	strlcpy(secbuf, ppp_settings.passwd, sizeof(secbuf));
     } else if (!am_server && chap_passwd_hook) {
 	if ( (*chap_passwd_hook)(client, secbuf) < 0) {
-	    ppp_error("Unable to obtain CHAP password for %s on %s from plugin",
-		  client, server);
+	    ppp_error(("Unable to obtain CHAP password for %s on %s from plugin",
+		  client, server));
 	    return 0;
 	}
     } else {
@@ -1988,7 +1947,7 @@ int get_secret(ppp_pcb *pcb, char *client, char *server, char *secret, int *secr
 
 	f = fopen(filename, "r");
 	if (f == NULL) {
-	    ppp_error("Can't open chap secret file %s: %m", filename);
+	    ppp_error(("Can't open chap secret file %s: %m", filename));
 	    return 0;
 	}
 	check_access(f, filename);
@@ -2008,7 +1967,7 @@ int get_secret(ppp_pcb *pcb, char *client, char *server, char *secret, int *secr
 
     len = strlen(secbuf);
     if (len > MAXSECRETLEN) {
-	ppp_error("Secret for %s on %s is too long", client, server);
+	ppp_error(("Secret for %s on %s is too long", client, server));
 	len = MAXSECRETLEN;
     }
     MEMCPY(secret, secbuf, len);
@@ -2016,8 +1975,9 @@ int get_secret(ppp_pcb *pcb, char *client, char *server, char *secret, int *secr
     *secret_len = len;
 
     return 1;
-#endif
+#endif /* UNUSED */
 }
+#endif /* PPP_AUTH_SUPPORT */
 
 
 #if 0 /* UNUSED */
@@ -2047,7 +2007,7 @@ get_srp_secret(unit, client, server, secret, am_server)
 
 	fp = fopen(filename, "r");
 	if (fp == NULL) {
-	    ppp_error("Can't open srp secret file %s: %m", filename);
+	    ppp_error(("Can't open srp secret file %s: %m", filename));
 	    return 0;
 	}
 	check_access(fp, filename);
@@ -2141,8 +2101,8 @@ set_allowed_addrs(unit, addrs, opts)
 
 	    bit_count = (int) strtol (ptr_mask+1, &endp, 10);
 	    if (bit_count <= 0 || bit_count > 32) {
-		ppp_warn("invalid address length %v in auth. address list",
-		     ptr_mask+1);
+		ppp_warn(("invalid address length %v in auth. address list",
+		     ptr_mask+1));
 		continue;
 	    }
 	    bit_count = 32 - bit_count;	/* # bits in host part */
@@ -2151,7 +2111,7 @@ set_allowed_addrs(unit, addrs, opts)
 		++endp;
 	    }
 	    if (*endp != 0) {
-		ppp_warn("invalid address length syntax: %v", ptr_mask+1);
+		ppp_warn(("invalid address length syntax: %v", ptr_mask+1));
 		continue;
 	    }
 	    *ptr_mask = '\0';
@@ -2164,10 +2124,10 @@ set_allowed_addrs(unit, addrs, opts)
 	} else {
 	    np = getnetbyname (ptr_word);
 	    if (np != NULL && np->n_addrtype == AF_INET) {
-		a = htonl ((u32_t)np->n_net);
+		a = lwip_htonl ((u32_t)np->n_net);
 		if (ptr_mask == NULL) {
 		    /* calculate appropriate mask for net */
-		    ah = ntohl(a);
+		    ah = lwip_ntohl(a);
 		    if (IN_CLASSA(ah))
 			mask = IN_CLASSA_NET;
 		    else if (IN_CLASSB(ah))
@@ -2184,19 +2144,19 @@ set_allowed_addrs(unit, addrs, opts)
 	    *ptr_mask = '/';
 
 	if (a == (u32_t)-1L) {
-	    ppp_warn("unknown host %s in auth. address list", ap->word);
+	    ppp_warn(("unknown host %s in auth. address list", ap->word));
 	    continue;
 	}
 	if (offset != 0) {
 	    if (offset >= ~mask) {
-		ppp_warn("interface unit %d too large for subnet %v",
-		     ifunit, ptr_word);
+		ppp_warn(("interface unit %d too large for subnet %v",
+		     ifunit, ptr_word));
 		continue;
 	    }
-	    a = htonl((ntohl(a) & mask) + offset);
+	    a = lwip_htonl((lwip_ntohl(a) & mask) + offset);
 	    mask = ~(u32_t)0;
 	}
-	ip[n].mask = htonl(mask);
+	ip[n].mask = lwip_htonl(mask);
 	ip[n].base = a & ip[n].mask;
 	++n;
 	if (~mask == 0 && suggested_ip == 0)
@@ -2277,7 +2237,7 @@ int
 bad_ip_adrs(addr)
     u32_t addr;
 {
-    addr = ntohl(addr);
+    addr = lwip_ntohl(addr);
     return (addr >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET
 	|| IN_MULTICAST(addr) || IN_BADCLASS(addr);
 }
@@ -2338,10 +2298,10 @@ check_access(f, filename)
     struct stat sbuf;
 
     if (fstat(fileno(f), &sbuf) < 0) {
-	ppp_warn("cannot stat secret file %s: %m", filename);
+	ppp_warn(("cannot stat secret file %s: %m", filename));
     } else if ((sbuf.st_mode & (S_IRWXG | S_IRWXO)) != 0) {
-	ppp_warn("Warning - secret file %s has world and/or group access",
-	     filename);
+	ppp_warn(("Warning - secret file %s has world and/or group access",
+	     filename));
     }
 }
 
@@ -2451,12 +2411,12 @@ scan_authfile(f, client, server, secret, addrs, opts, filename, flags)
 	    if (word[0] == '@' && word[1] == '/') {
 		strlcpy(atfile, word+1, sizeof(atfile));
 		if ((sf = fopen(atfile, "r")) == NULL) {
-		    ppp_warn("can't open indirect secret file %s", atfile);
+		    ppp_warn(("can't open indirect secret file %s", atfile));
 		    continue;
 		}
 		check_access(sf, atfile);
 		if (!getword(sf, word, &xxx, atfile)) {
-		    ppp_warn("no secret in indirect secret file %s", atfile);
+		    ppp_warn(("no secret in indirect secret file %s", atfile));
 		    fclose(sf);
 		    continue;
 		}
