@@ -1,19 +1,24 @@
-## This fork: fixed upload throughput on macOS (and small-buffer systems)
+## Upload throughput fix on macOS (and small-buffer systems)
 
-Stock ocproxy silently **drops upstream packets** when the `--script-tun`
-socketpair to openconnect is full (`lwip_data_out` counted a link-level drop
-and moved on). On macOS the socketpair holds only ~2 datagrams
+The backpressure fix and throughput measurements below were contributed by
+Jian Zhou in [upstream PR #33](https://github.com/cernekee/ocproxy/pull/33),
+developed in [jzthree/ocproxy](https://github.com/jzthree/ocproxy). This fork
+incorporates that contribution.
+
+Before that fix, ocproxy silently **dropped upstream packets** when the
+`--script-tun` socketpair to openconnect was full (`lwip_data_out` counted a
+link-level drop and moved on). On macOS the socketpair holds only ~2 datagrams
 (`net.local.dgram.recvspace` = 4 KB), so any upload burst overflows it; lwIP
 then stalls in ~1 s retransmission timeouts and uploads collapse to roughly
 one send window per second — **~60 KB/s measured, while downloads ran at
 4 MB/s** on the same VPN.
 
-This branch adds lossless backpressure: on `EAGAIN`/`ENOBUFS` the packet is
-queued (bounded FIFO) and flushed when the fd turns writable. It also hardens
-the VPN read path (`EAGAIN` is not a dead VPN, and the stock code fell
+The contribution adds lossless backpressure: on `EAGAIN`/`ENOBUFS` the packet
+is queued (bounded FIFO) and flushed when the fd turns writable. It also
+hardens the VPN read path (`EAGAIN` is not a dead VPN, and the old code fell
 through to `pbuf_alloc()` with a negative length after `vpn_conn_down()`).
 
-Measured on a production AnyConnect VPN (macOS arm64):
+As reported with the contribution, on a production AnyConnect VPN (macOS arm64):
 uploads **61 KB/s → 1.9 MB/s** (single stream) and **3.8 MB/s sustained**;
 downloads unchanged. Linux is less affected (~200 KB default buffers) but
 the drop-instead-of-backpressure behavior is the same.
@@ -72,6 +77,9 @@ OpenConnect can (and should) be run as a non-root user when using ocproxy.
 Logging
 -------
 
+Connection logging and the documentation in this section were contributed by
+Miroslav Hostinsky.
+
 ocproxy can log all proxy requests to a file using the `-l` or `--logfile` option:
 
     openconnect --script-tun --script \
@@ -99,6 +107,11 @@ The log file is opened in append mode, so logs persist across multiple ocproxy s
 
 Using the HTTP proxy
 ---------------------
+
+HTTP proxy support was introduced by bman in
+[upstream PR #30](https://github.com/cernekee/ocproxy/pull/30), from
+[bmansvk/ocproxy](https://github.com/bmansvk/ocproxy). Miroslav Hostinsky
+contributed subsequent HTTP proxy enhancements.
 
 The HTTP proxy supports both regular HTTP methods (GET, POST, PUT, DELETE, etc.)
 and the CONNECT method for tunneling HTTPS connections. This provides full
@@ -337,6 +350,27 @@ Credits
 Original author: David Edmondson &lt;dme@dme.org&gt;
 
 Current maintainer: Kevin Cernekee &lt;cernekee@gmail.com&gt;
+
+Contributions incorporated from upstream:
+
+ * [GitHub Security Lab, PR #14](https://github.com/cernekee/ocproxy/pull/14)
+   ([ghsecuritylab/ocproxy](https://github.com/ghsecuritylab/ocproxy)):
+   security fix for the PPP hostname buffer.
+ * [genisysram, PR #18](https://github.com/cernekee/ocproxy/pull/18)
+   ([genisysram/ocproxy](https://github.com/genisysram/ocproxy)):
+   ppc64le architecture support.
+ * [Herwig Hochleitner, PR #21](https://github.com/cernekee/ocproxy/pull/21)
+   ([bendlas/ocproxy](https://github.com/bendlas/ocproxy)):
+   configurable UID/GID mappings for vpnns.
+ * [bman, PR #30](https://github.com/cernekee/ocproxy/pull/30)
+   ([bmansvk/ocproxy](https://github.com/bmansvk/ocproxy)):
+   HTTP proxy support.
+ * [Jian Zhou, PR #33](https://github.com/cernekee/ocproxy/pull/33)
+   ([jzthree/ocproxy](https://github.com/jzthree/ocproxy)):
+   lossless backpressure for VPN socketpair writes.
+
+Additional HTTP proxy and connection-logging enhancements were contributed by
+Miroslav Hostinsky.
 
 Fork home page: https://github.com/matteosecli/ocproxy
 
