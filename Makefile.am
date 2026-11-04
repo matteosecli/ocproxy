@@ -51,7 +51,7 @@ DISTCLEANFILES		= *~
 # Copy from $(srcdir) only: with subdir-objects, a plain EXTRA_DIST entry for
 # lwip/ would also pick up the object files from the build directory.
 dist-hook:
-	mkdir -p $(distdir)/lwip && cp -R $(srcdir)/lwip/. $(distdir)/lwip/
+	(cd $(srcdir) && tar cf - lwip) | (cd $(distdir) && tar xf -)
 	chmod -R u+w $(distdir)/lwip
 
 LWIP_GIT		= https://github.com/lwip-tcpip/lwip.git
